@@ -1,7 +1,7 @@
 # Magento Encryption Key Rotation Tool
 
 ## Thank you!
-This repository is a fork of https://github.com/bemeir/magento2-rotate-encryption-keys. I want to thank the original authors for creating this script. 
+This repository is a fork of https://github.com/bemeir/magento2-rotate-encryption-keys. I want to thank the original authors for creating this script!
 
 This is a slightly modified version that has a few differences:
 * It removes the CSV export functionality
@@ -9,6 +9,7 @@ This is a slightly modified version that has a few differences:
 * It reads the ID field from the database
 * It can generate a list of commands from the original scan command
 * Allows running in a sub-folder (for Magento Cloud/Read only file systems)
+* It adds functionality to scan and replace encrypted values in `env.php`
 
 ## Overview
 
@@ -35,17 +36,20 @@ This tool is provided as-is, without any warranty. Use at your own risk and alwa
 - Supports multiple encryption keys
 - Generates backup of current encrypted values
 - Option to update database directly or generate SQL update statements
+- Functionality to scan and replace encrypted values in `env.php`
 
 ## Installation
 
 1. Clone this repository or download the `update-encryption.php` script.
 2. Place the script in the root directory of your Magento installation.
 
-## Functionality
+## Functionality (Database)
 
-### Scan Mode
+Below is an description of the commands that are available for manipulating the database.
 
-Run the script in scan mode to identify encrypted values.
+### Scan
+
+Run the script with the `scan` command to identify encrypted values.
 On execution it shows the results in the following format:
 
 `<tablename>::<field>::<id_field>`
@@ -62,9 +66,10 @@ oauth_token::secret::entity_id
 tfa_user_config::encoded_config::config_id
 ```
 
-### Generate Commands Mode
 
-Run the script in generate-command mode to scan the database for encrypted
+### Generate Commands
+
+Run the script with `generate-commands` command to scan the database for encrypted
 values and generate the appropiate update-table commands.
 
 ```
@@ -82,9 +87,10 @@ php update-encryption.php update-table --table=tfa_user_config --field=encoded_c
 For the parameters of this mode see Update Table Values mode. Any parameter given will be added to the 
 generated commands.
 
-### Update Table Values Mode
 
-Run the script in the update-tables mode to update the values in the database or echo/dump the commands to
+### Update Table Values
+
+Run the script with `update-table` command to update the values in the database or echo/dump the commands to
 the console and/or SQL files.
 
 ```
@@ -104,15 +110,62 @@ It supports the following arguments:
 * `--id-field=ID_FIELD` Field to use as unique identifier
 * `--key-number=NUMBER` (optional) key number to use for encryption (default = 1, e.g. second crypt key)
 * `--old-key-number=NUMBER` (optional) key number to use for decryption (default = 0, e.g. first crypt key)
-* `--dru-run` (optional) if flag is added no SQL queries are executed
+* `--dry-run` (optional) if flag is added no SQL queries are executed
 * `--dump-file=FILENAME` (optional) if file is given queries are dumped (added) to this file instead of executing. 
 * `--backup-file=FILENAME` (optional) if file is given queries are dumped (added) to this file to revert the database changes.
 
-### Update Single Record Values Mode
 
-This mode is exactly the same as the Update Table Values Mode but with the addition of 1 parameter:
+
+### Update Single Record Values
+
+This `update-record` is exactly the same as the `update-table` command but with the addition of 1 parameter:
 
 * `--id=ID` only update this id
+
+
+
+## Functionality (env.php file)
+
+Below is an description of the commands that are available for manipulating the env.php file.
+
+### Scan
+
+Run the script with the `scan-env` command to find keys in env.php that contain encrypted properties. A list of paths are returned.
+
+```
+php update-encryption.php scan-env 
+```
+
+Example output:
+```
+system/default/newrelicreporting/general/api
+system/default/newrelicreporting/general/insights_insert_key
+system/default/buckaroo_magento2/account/secret_key
+system/default/buckaroo_magento2/account/merchant_key
+```
+
+### Update
+
+Run the script with the `update-env` command to find and update keys in env.php that contain encrypted properties.
+
+```
+php update-encryption.php update-env [--key-number=NUMBER] [--old-key-number=NUMBER] [--dry-run] [--dump-file=FILENAME] [--backup-file=FILENAME]
+```
+
+Example output:
+```
+system/default/buckaroo_magento2/account/secret_key = 1:3:**REDACTED**
+system/default/buckaroo_magento2/account/merchant_key = 1:3:**REDACTED**
+```
+
+
+It supports the following arguments:
+
+* `--key-number=NUMBER` (optional) key number to use for encryption (default = 1, e.g. second crypt key)
+* `--old-key-number=NUMBER` (optional) key number to use for decryption (default = 0, e.g. first crypt key)
+* `--dry-run` (optional) if flag is added the env.php file is not updated
+* `--dump-file=FILENAME` (optional) if file is given the original env.php is not updated but a new file is dumped to this file.
+* `--backup-file=FILENAME` (optional) if file is given the current env.php contents is dumped to this filename.
 
 
 ## Suggested usage
@@ -121,25 +174,41 @@ This mode is exactly the same as the Update Table Values Mode but with the addit
 Put the environment into maintenance mode.
 
 ### Step 2
-Make a full backup of the database
+Make a full backup of the database and of env.php
 
 ## Step 3
 Add an additional crypt key to `env.php`. This additional key needs to be `SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_KEYBYTES` long which in general is 32 characters. Important! The value is a single string seperated by a whitespace (enter or space), e.g. `key1 key2`
 
 ## Step 4
-Run the command `php update-encryption.php generate-commands --backup-file=restore-values.sql`
+Run the command `php update-encryption.php generate-commands`
 
 ## Step 5
 Run the commands outputted by the previous command. 
 
 ## Step 6
+Run the command `php update-encryption.php update-env`. In the case that the env.php file is not directly
+writable (or uses a symlink) use the `--dry-run` property get the paths and values to update manually.
+
+## Step 7 (Optional: only if your old key is not secure anymore)
+If the old key is deemed insecure and needs to be removed then follow the following additional steps.
+Do note that any customer and/or admin password is invalidated and a password reset is needed so use with care. 
+
+* After performing step 1-6 replace the original key with the new key (replace, do not remove!), e.g. if
+  your old key was `aaa` and your new key `bbb` replace `aaa bbb` with `bbb bbb`.
+* Run the command `php update-encryption.php generate-commands --key-number=0 --old-key-number=1`
+* Run the commands outputted by the previous command. 
+* Run the command `php update-encryption.php update-env --key-number=0 --old-key-number=1`
+* You can now remove the duplicate crypt keys from env.php
+
+## Step 8
 Flush the cache
+
 
 
 ## Important Notes
 
 - This script is designed for use by experienced Magento developers.
-- Always backup your database before running this script.
+- Always backup your database and env.php before running this script.
 - The script uses `fetchAll`, which may consume significant memory for large tables.
 - Currently only supports Sodium for encryption (legacy mcrypt values are not handled).
 - Encrypted values within JSON or URL parameters may be missed.

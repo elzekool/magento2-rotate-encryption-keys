@@ -23,10 +23,32 @@
  * SOFTWARE.
  */
 
+use Magento\Framework\App\DeploymentConfig\Writer\PhpFormatter;
 use Magento\Framework\Encryption\Adapter\SodiumChachaIetf;
 
 // Configure this with relevant tables
-$tablesToExclude = ["%^catalog%", "%amasty_xsearch_users_search%", "%url_rewrite%", "%amasty_merchandiser_product_index_eav_replica%"];
+$tablesToExclude = [
+    "%^catalog%",
+    "%amasty_xsearch_users_search%",
+    "%url_rewrite%",
+    "%amasty_merchandiser_product_index_eav_replica%"
+];
+$envPathsToExclude = [
+    "backend/",
+    "crypt/",
+    "db/",
+    "resource/",
+    "x-frame-options/",
+    "MAGE_MODE/",
+    "session/",
+    "queue/",
+    "cache/",
+    "lock/",
+    "cache_types/",
+    "install/",
+    "directories/",
+    "http_cache_hosts/",
+];
 
 $basePath = __DIR__;
 if (!file_exists($basePath . '/app/etc/env.php')) {
@@ -40,12 +62,17 @@ if (!file_exists($basePath . '/app/etc/env.php')) {
 $scriptName = $argv[0];
 $command = $argv[1] ?? "";
 
-if (!in_array($command, ['scan', 'generate-commands', 'update-table', 'update-record'])) {
+if (!in_array($command, ['scan', 'generate-commands', 'update-table', 'update-record', 'scan-env', 'update-env'])) {
     echo "Usage:\n";
-    echo "   php $scriptName scan\n";
-    echo "   php $scriptName generate-commands [--key-number=NUMBER] [--old-key-number=NUMBER] [--dry-run] [--dump-file=FILENAME]\n";
-    echo "   php $scriptName update-table --table=TABLE --field=FIELD --id-field=ID_FIELD [--key-number=NUMBER] [--old-key-number=NUMBER] [--dry-run] [--dump-file=FILENAME] [--backup-file=FILENAME]\n";
-    echo "   php $scriptName update-record --table=TABLE --field=FIELD --id-field=ID_FIELD --id=ID [--key-number=NUMBER] [--old-key-number=NUMBER] [--dry-run] [--dump-file=FILENAME] [--backup-file=FILENAME]\n";
+    echo "  Database commands:\n";
+    echo "    php $scriptName scan\n";
+    echo "    php $scriptName generate-commands [--key-number=NUMBER] [--old-key-number=NUMBER] [--dry-run] [--dump-file=FILENAME]\n";
+    echo "    php $scriptName update-table --table=TABLE --field=FIELD --id-field=ID_FIELD [--key-number=NUMBER] [--old-key-number=NUMBER] [--dry-run] [--dump-file=FILENAME] [--backup-file=FILENAME]\n";
+    echo "    php $scriptName update-record --table=TABLE --field=FIELD --id-field=ID_FIELD --id=ID [--key-number=NUMBER] [--old-key-number=NUMBER] [--dry-run] [--dump-file=FILENAME] [--backup-file=FILENAME]\n";
+    echo "\n";
+    echo "  Environment file commands:\n";
+    echo "   php $scriptName scan-env\n";
+    echo "   php $scriptName update-env [--key-number=NUMBER] [--old-key-number=NUMBER] [--dry-run] [--dump-file=FILENAME] [--backup-file=FILENAME]\n";
     exit();
 }
 
@@ -88,10 +115,10 @@ foreach ($argv as $i => $argument) {
 
 require $basePath . '/vendor/magento/framework/Encryption/Adapter/EncryptionAdapterInterface.php';
 require $basePath . '/vendor/magento/framework/Encryption/Adapter/SodiumChachaIetf.php';
+require $basePath . '/vendor/magento/framework/App/DeploymentConfig/Writer/FormatterInterface.php';
+require $basePath . '/vendor/magento/framework/App/DeploymentConfig/Writer/PhpFormatter.php';
 
-$env    = include $basePath . '/app/etc/env.php';
-$config = $env['db']['connection']['default'];
-$db     = new PDO(sprintf('mysql:host=%s;dbname=%s;', $config['host'], $config['dbname']), $config['username'], $config['password']);
+$env = include $basePath . '/app/etc/env.php';
 
 $keys = preg_split('/\s+/s', trim((string) $env['crypt']['key']));
 if ($params['old-key-number'] >= count($keys)) {
@@ -107,7 +134,32 @@ $crypt  = new SodiumChachaIetf($key);
 $newKey = $keys[$params['key-number']];
 $cryptNew  = new SodiumChachaIetf($newKey);
 
+function recursiveScanEnv($envPathsToExclude, $value, callable $onMatch, $path = '')
+{
+    foreach ($envPathsToExclude as $envPathToExclude) {
+        if (str_starts_with($path, $envPathToExclude)) {
+            return $value;
+        }
+    }
+
+    if (is_array($value)) {
+        foreach($value as $key => $field) {
+            $value[$key] = recursiveScanEnv($envPathsToExclude, $field, $onMatch, $path . ($path === '' ? '' : '/') . $key );
+        }
+        return $value;
+    }
+
+    if (is_string($value) && preg_match("%^\d\:\d\:%", $value)) {
+        return $onMatch($value, $path);
+    }
+
+    return $value;
+}
+
 if ($command == 'scan' || $command == 'generate-commands') {
+    $dbConfig = $env['db']['connection']['default'];
+    $db = new PDO(sprintf('mysql:host=%s;dbname=%s;', $dbConfig['host'], $dbConfig['dbname']), $dbConfig['username'], $dbConfig['password']);
+
     $encryptedFields = [];
 
     $tables = $db->query("SHOW TABLES")->fetchAll();
@@ -188,6 +240,9 @@ if ($command == 'scan' || $command == 'generate-commands') {
 
 
 if ($command == 'update-table' || $command == 'update-record') {
+    $dbConfig = $env['db']['connection']['default'];
+    $db = new PDO(sprintf('mysql:host=%s;dbname=%s;', $dbConfig['host'], $dbConfig['dbname']), $dbConfig['username'], $dbConfig['password']);
+
     if (!isset($params['table']))
         exit("--table option is required");
     if (!isset($params['id-field']))
@@ -257,3 +312,40 @@ if ($command == 'update-table' || $command == 'update-record') {
     }
 }
 
+if ($command === 'scan-env') {
+    recursiveScanEnv($envPathsToExclude, $env, function($value, $path) {
+        echo sprintf("%s", $path) . "\n";
+    });
+}
+
+if ($command === 'update-env') {
+    $updatedEnv = recursiveScanEnv($envPathsToExclude, $env, function(&$value, $path) use ($crypt, $cryptNew, $params) {
+        if (!str_starts_with($value, sprintf('%d:3', $params['old-key-number']))) {
+            return;
+        }
+
+        $chunks      = explode(':', $value);
+        $decrypted   = $crypt->decrypt(base64_decode($chunks[2]));
+        $reEncrypted = sprintf("%d:3:%s", $params['key-number'], base64_encode($cryptNew->encrypt($decrypted)));
+
+        echo sprintf("%s = %s", $path, $reEncrypted) . "\n";
+
+        return $reEncrypted;
+    });
+
+    $formatter = new PhpFormatter();
+    $newEnvContents = $formatter->format($updatedEnv);
+
+    if (!empty($params['dump-file'])) {
+        file_put_contents($params['dump-file'], $newEnvContents);
+    }
+
+    if (!empty($params['backup-file'])) {
+        $currentEnv = file_get_contents($basePath . '/app/etc/env.php');
+        file_put_contents($params['backup-file'], $currentEnv);
+    }
+
+    if (!$params['dry-run'] && empty($params['dump-file'])) {
+        file_put_contents($basePath . '/app/etc/env.php', $newEnvContents);
+    }
+}
