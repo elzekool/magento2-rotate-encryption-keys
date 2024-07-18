@@ -201,7 +201,10 @@ Do note that any customer and/or admin password is invalidated and a password re
 * You can now remove the duplicate crypt keys from env.php
 
 ## Step 8
-Flush the cache
+Update Magento configuration with `bin/magento setup:upgrade --keep-generated`
+
+## Step 9
+Disable maintenance mode
 
 
 
