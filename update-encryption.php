@@ -1,18 +1,19 @@
+<?php
 /**
  * This code is licensed under the MIT License.
- * 
+ *
  * MIT License
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
  * in the Software without restriction, including without limitation the rights
  * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
  * copies of the Software, and to permit persons to whom the Software is
  * furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included in all
  * copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -22,43 +23,52 @@
  * SOFTWARE.
  */
 
-<?php
+use Magento\Framework\Encryption\Adapter\SodiumChachaIetf;
 
-if (!file_exists('./app/etc/env.php')) {
-    exit("Run the script from the magento root folder");
-}
-if (!isset($argv[1]) || !in_array($argv[1], ['scan', 'update-table', 'update-record'])) {
-    exit("Usage:\n     php update-encryption.php scan --output=[FILE] [--decrypt] [--key=KEY] [--key-number=NUMBER] [--old-key=KEY] [--old-key-number=NUMBER] [--re-encrypt]\n     php update-encryption.php [update-table|update-record] --table=TABLE --field=FIELD --id-field=ID_FIELD --key=KEY [--key-number=NUMBER] [--old-key=KEY] [--old-key-number=NUMBER] [--id=ID] [--dump=FILE] [--dry-run]\n");
+// Configure this with relevant tables
+$tablesToExclude = ["%^catalog%", "%amasty_xsearch_users_search%", "%url_rewrite%", "%amasty_merchandiser_product_index_eav_replica%"];
+
+$basePath = __DIR__;
+if (!file_exists($basePath . '/app/etc/env.php')) {
+    if (file_exists(dirname($basePath) . '/app/etc/env.php')) {
+        $basePath = dirname($basePath);
+    } else {
+        exit("Run the script from the magento root folder or in the var folder");
+    }
 }
 
-$command = $argv[1];
+$scriptName = $argv[0];
+$command = $argv[1] ?? "";
+
+if (!in_array($command, ['scan', 'generate-commands', 'update-table', 'update-record'])) {
+    echo "Usage:\n";
+    echo "   php $scriptName scan\n";
+    echo "   php $scriptName generate-commands [--key-number=NUMBER] [--old-key-number=NUMBER] [--dry-run] [--dump-file=FILENAME]\n";
+    echo "   php $scriptName update-table --table=TABLE --field=FIELD --id-field=ID_FIELD [--key-number=NUMBER] [--old-key-number=NUMBER] [--dry-run] [--dump-file=FILENAME] [--backup-file=FILENAME]\n";
+    echo "   php $scriptName update-record --table=TABLE --field=FIELD --id-field=ID_FIELD --id=ID [--key-number=NUMBER] [--old-key-number=NUMBER] [--dry-run] [--dump-file=FILENAME] [--backup-file=FILENAME]\n";
+    exit();
+}
+
 $params = [
-    'decrypt'    => false,
-    're-encrypt' => false,
-    'dry-run'    => false,
+    'dry-run' => false,
     'key-number' => 1,
     'old-key-number' => 0,
-    'output'     => 'encrypted-values.csv'
+    'id-field' => '',
+    'field' => '',
+    'table' => '',
+    'id' => '',
+    'dump-file' => '',
+    'backup-file' => ''
 ];
-
 
 foreach ($argv as $i => $argument) {
     if ($i == 0 || $i == 1)
         continue;
-    if ($argument == '--decrypt') {
-        $params['decrypt'] = true;
-    } else if ($argument == '--re-encrypt') {
-        $params['re-encrypt'] = true;
-    } else if ($argument == '--dry-run') {
+
+    if ($argument == '--dry-run') {
         $params['dry-run'] = true;
-    } else if (preg_match('%--output=(.*?)$%', $argument, $m)) {
-        $params['output'] = $m[1];
-    } else if (preg_match('%--key=(.*?)$%', $argument, $m)) {
-        $params['key'] = $m[1];
     } else if (preg_match('%--key-number=(\d+?)$%', $argument, $m)) {
         $params['key-number'] = (int)$m[1];
-    } else if (preg_match('%--old-key=(.*?)$%', $argument, $m)) {
-        $params['old-key'] = $m[1];
     } else if (preg_match('%--old-key-number=(\d+?)$%', $argument, $m)) {
         $params['old-key-number'] = (int)$m[1];
     } else if (preg_match('%--id-field=(.*?)$%', $argument, $m)) {
@@ -67,40 +77,41 @@ foreach ($argv as $i => $argument) {
         $params['field'] = $m[1];
     } else if (preg_match('%--table=(.*?)$%', $argument, $m)) {
         $params['table'] = $m[1];
-    } else if (preg_match('%--id=(.*?)$%', $argument, $m)) {
+    } else if (preg_match('%--id=(\d+?)$%', $argument, $m)) {
         $params['id'] = $m[1];
-    } else if (preg_match('%--dump=(.*?)$%', $argument, $m)) {
-        $params['dump'] = $m[1];
+    } else if (preg_match('%--dump-file=(.*?)$%', $argument, $m)) {
+        $params['dump-file'] = $m[1];
+    } else if (preg_match('%--backup-file=(.*?)$%', $argument, $m)) {
+        $params['backup-file'] = $m[1];
     }
-
 }
 
-require './vendor/magento/framework/Encryption/Adapter/EncryptionAdapterInterface.php';
-require './vendor/magento/framework/Encryption/Adapter/SodiumChachaIetf.php';
+require $basePath . '/vendor/magento/framework/Encryption/Adapter/EncryptionAdapterInterface.php';
+require $basePath . '/vendor/magento/framework/Encryption/Adapter/SodiumChachaIetf.php';
 
-$env    = include __DIR__ . '/app/etc/env.php';
+$env    = include $basePath . '/app/etc/env.php';
 $config = $env['db']['connection']['default'];
-$db     = new \PDO(sprintf('mysql:host=%s;dbname=%s;', $config['host'], $config['dbname']), $config['username'], $config['password']);
-$key    = isset($params['old-key']) && $params['old-key'] ? $params['old-key'] : $env['crypt']['key'];
-$keyLines = explode("\n", $key);
-if (!isset($params['old-key']) && is_array($keyLines)) {
-    if (isset($keyLines[$params['old-key-number']]))
-        $key = $keyLines[$params['old-key-number']];
-    else
-        exit("OLD KEY NUMBER IS WRONG, NO KEY WITH NUMBER " . $params['old-key-number'] . " FOUND IN app/etc/env.php\n");
-    
+$db     = new PDO(sprintf('mysql:host=%s;dbname=%s;', $config['host'], $config['dbname']), $config['username'], $config['password']);
+
+$keys = preg_split('/\s+/s', trim((string) $env['crypt']['key']));
+if ($params['old-key-number'] >= count($keys)) {
+    exit("--old-key-number is not a valid key number");
+}
+if ($params['key-number'] >= count($keys)) {
+    exit("--key-number is not a valid key number");
 }
 
-$crypt    = new \Magento\Framework\Encryption\Adapter\SodiumChachaIetf($key);
-if (isset($params['key']) && $params['key'])
-    $cryptNew = new \Magento\Framework\Encryption\Adapter\SodiumChachaIetf($params['key']);
+$key = $keys[$params['old-key-number']];
+$crypt  = new SodiumChachaIetf($key);
 
-if ($command == 'scan') {
+$newKey = $keys[$params['key-number']];
+$cryptNew  = new SodiumChachaIetf($newKey);
+
+if ($command == 'scan' || $command == 'generate-commands') {
     $encryptedFields = [];
-    $tablesToExclude = ["%^catalog%", "%amasty_xsearch_users_search%", "%url_rewrite%", "%amasty_merchandiser_product_index_eav_replica%"];
+
     $tables = $db->query("SHOW TABLES")->fetchAll();
-    $f = fopen($params['output'], 'w');
-    fputcsv($f, ['table', 'id_field', 'id value', 'path', 'field', 'value', 'decrypted', 're-encrypted']);
+
     foreach ($tables as $tableRow) {
         $table = $tableRow[0];
         $skipTable = false;
@@ -110,101 +121,137 @@ if ($command == 'scan') {
                 break;
             }
         }
-        if ($skipTable)
+
+        if ($skipTable) {
             continue;
-        
+        }
+
         $data = $db->query("SELECT * FROM $table")->fetchAll(PDO::FETCH_ASSOC);
-        if (!$data)
+        if (!$data) {
             continue;
-        foreach ($data as $row) {
-            $idField = '';
-            $idValue = '';
-            $isCoreConfigData = false;
-            if (preg_match("%core_config_data%", $table)) {
-                $idField = 'config_id';
-                $idValue = $row['config_id'];
-                $isCoreConfigData = true;
-            } else {
-                foreach ($row as $fieldName => $value) {
-                    if (preg_match('%_id$%', $fieldName)) {
-                        $idField = $fieldName;
-                        $idValue = $value;
-                    }
-                }
+        }
+
+        $fields = $db->query("SHOW COLUMNS FROM $table")->fetchAll(PDO::FETCH_ASSOC);
+        if (!$fields) {
+            continue;
+        }
+
+        $idField = "";
+        foreach ($fields as $field) {
+            if ($field['Extra'] == 'auto_increment') {
+                $idField = $field['Field'];
             }
+        }
+
+        foreach ($data as $row) {
             foreach ($row as $fieldName => $value) {
                 if (($value !== null) && preg_match("%^\d\:\d\:%", $value)) {
-                    $chunks      = explode(':', $value);
-                    $decrypted   = 'N/A';
-                    $reEncrypted = 'N/A';
-                    $path        = $isCoreConfigData ? $row['path'] : 'N/A';
-                    if ($params['decrypt'] && isset($params['key'])) {
-                        $decrypted   = $crypt->decrypt(base64_decode($chunks[2]));
-                    }
-                    if ($params['re-encrypt'] && isset($params['key'])) {
-                        $reEncrypted = sprintf("%d:3:%s", $params['key-number'], base64_encode($cryptNew->encrypt($decrypted)));
-                    }
-                    $update = [
-                        $table, $idField, $idValue, $path, $fieldName, $value, $decrypted, $reEncrypted
-                    ];
-                    fputcsv($f, $update);
-                    $encryptedField = sprintf("$table::$fieldName");
+                    $encryptedField = sprintf("%s::%s::%s", $table, $fieldName, $idField);
                     if (!in_array($encryptedField, $encryptedFields)) {
                         $encryptedFields[] = $encryptedField;
                     }
                 }
             }
         }
-        
     }
-    print_r($encryptedFields);
-} else if ($command == 'update-table' || $command == 'update-record') {
+
+    if ($command === 'generate-commands') {
+        foreach ($encryptedFields as $encryptedField) {
+            [$table, $fieldName, $idField] = explode("::", $encryptedField);
+
+            $cmdParams = [];
+            $cmdParams[] = sprintf('--table=%s', $table);
+            $cmdParams[] = sprintf('--field=%s', $fieldName);
+            $cmdParams[] = sprintf('--id-field=%s', $idField);
+            if ($params['key-number'] !== 1) {
+                $cmdParams[] = sprintf('--key-number=%s', $params['key-number']);
+            }
+            if ($params['old-key-number'] !== 0) {
+                $cmdParams[] = sprintf('--old-key-number=%s',
+                    $params['old-key-number']);
+            }
+            if ($params['dry-run']) {
+                $cmdParams[] = "--dry-run";
+            }
+            if (!empty($params['dump-file'])) {
+                $cmdParams[] = sprintf('--dump-file=%s', $params['dump-file']);
+            }
+            if (!empty($params['backup-file'])) {
+                $cmdParams[] = sprintf('--backup-file=%s', $params['backup-file']);
+            }
+            echo sprintf("php $scriptName update-table %s", join(" ", $cmdParams)) . "\n";
+        };
+    } else {
+        echo join("\n", $encryptedFields) . "\n";
+    }
+}
+
+
+if ($command == 'update-table' || $command == 'update-record') {
     if (!isset($params['table']))
         exit("--table option is required");
-    if (!isset($params['key']))
-        exit("--key option is required");
     if (!isset($params['id-field']))
         exit("--id-field option is required");
     if (!isset($params['field']))
         exit("--field option is required");
-    if (isset($params['id']) && $command == 'update-record')
+    if (!isset($params['id']) && $command == 'update-record')
         exit("Use update-record command to update a single record");
 
     $idField = $params['id-field'];
-    $table   = $params['table'];
-    $field   = $params['field'];
+    $table = $params['table'];
+    $field = $params['field'];
 
     $keyNumber    = $params['old-key-number'];
     $recordFilter = '';
-    if ($command == 'update-record'  && isset($params['id']) && ($id = (int)$params['id']) > 0)
+    if ($command == 'update-record' && isset($params['id']) && ($id = (int)$params['id']) > 0) {
         $recordFilter = sprintf(" AND `%s`='%d'", $idField, $id);
+    }
+
     $query = sprintf("SELECT * FROM `%s` WHERE `%s` LIKE '%d:3%%' %s", $table, $field, $keyNumber, $recordFilter);
-    echo $query . "\n";
     $data = $db->query($query)->fetchAll(PDO::FETCH_ASSOC);
 
     $fileHandler = null;
     $backupHandler = null;
-    if ($params['dump']) {
-        $fileHandler   = fopen($params['dump'], 'a');
-        $backupHandler = fopen('backup-' . $params['dump'], 'a');
+    if (!empty($params['dump-file'])) {
+        $fileHandler = fopen($params['dump-file'], 'a');
+    }
+    if (!empty($params['backup-file'])) {
+        $backupHandler = fopen($params['backup-file'], 'a');
     }
     foreach ($data as $row) {
         $value = $row[$field];
         $chunks      = explode(':', $value);
         $decrypted   = $crypt->decrypt(base64_decode($chunks[2]));
         $reEncrypted = sprintf("%d:3:%s", $params['key-number'], base64_encode($cryptNew->encrypt($decrypted)));
-        
-        echo "UPDATING row $idField=" . $idField . ", $field=" . $row[$field] . "; New value = " . $reEncrypted . "\n";
-        $updateQuery = sprintf("UPDATE `%s` SET `%s`='%s' WHERE `%s`='%d' LIMIT 1;", $table, $field, $reEncrypted, $idField, $row[$idField]);
-        $backupQuery = sprintf("UPDATE `%s` SET `%s`='%s' WHERE `%s`='%d' LIMIT 1;", $table, $field, $value, $idField, $row[$idField]);
-        
-        if ($params['dump']) {
+
+        $updateQuery = sprintf(
+            "UPDATE `%s` SET `%s`=%s WHERE `%s`=%d LIMIT 1;",
+            $table,
+            $field,
+            $db->quote($reEncrypted),
+            $idField,
+            $row[$idField]
+        );
+
+        $backupQuery = sprintf(
+            "UPDATE `%s` SET `%s`=%s WHERE `%s`=%d LIMIT 1;",
+            $table,
+            $field,
+            $db->quote($value),
+            $idField,
+            $row[$idField]
+        );
+
+        if (!empty($params['dump-file'])) {
             fwrite($fileHandler, $updateQuery . "\n");
+        }
+
+        if (!empty($params['backup-file'])) {
             fwrite($backupHandler, $backupQuery . "\n");
         }
-        echo "    " . $updateQuery . "\n";
-        if (!isset($params['dry-run']) || !$params['dry-run']) {
-            echo "UPDATING !\n";
+
+        echo $updateQuery . "\n";
+        if (!$params['dry-run'] && empty($params['dump-file'])) {
             $db->query($updateQuery);
         }
     }

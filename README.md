@@ -1,5 +1,15 @@
 # Magento Encryption Key Rotation Tool
 
+## Thank you!
+This repository is a fork of https://github.com/bemeir/magento2-rotate-encryption-keys. I want to thank the original authors for creating this script. 
+
+This is a slightly modified version that has a few differences:
+* It removes the CSV export functionality
+* It always read the key from env.php (also the new key)
+* It reads the ID field from the database
+* It can generate a list of commands from the original scan command
+* Allows running in a sub-folder (for Magento Cloud/Read only file systems)
+
 ## Overview
 
 This script addresses the limitations of Magento's native encryption key rotation functionality, particularly in light of recent security vulnerabilities like CosmicSting. It provides a different approach to re-encrypting sensitive data across Magento databases.
@@ -31,48 +41,100 @@ This tool is provided as-is, without any warranty. Use at your own risk and alwa
 1. Clone this repository or download the `update-encryption.php` script.
 2. Place the script in the root directory of your Magento installation.
 
-## Usage
+## Functionality
 
-### Step 1: Scan Mode
+### Scan Mode
 
-Run the script in scan mode to identify encrypted values:
-This will generate a CSV file listing all tables, fields, and encrypted values found.
+Run the script in scan mode to identify encrypted values.
+On execution it shows the results in the following format:
 
-```
-php update-encryption.php scan
-```
-
-We can also do this:
+`<tablename>::<field>::<id_field>`
 
 ```
-php update-encryption.php scan --decrypt --re-encrypt --key=NEW_KEY
-```
-This will (try to) decrypt all values and write both encrypted with the original key, decrypted and encrypted with the new key values in encrypted-values.csv. You can change filename with --output=FILE command.
-
-### Step 2: Re-encryption
-
-After reviewing the scan results, run the script to re-encrypt the data.
-This command DOES  CHANGE  the database!!! Be careful!! Only run it when old encryption key is written in env.php
-
-```
-update-encryption.php update-table --table=core_config_data\
-      --id-field=config_id --field=value --key=NEW_KEY --key-index=1\
-       --old-key-index=[0/1]
-       --dump=rotation.sql
-       --dry-run
+php update-encryption.php scan [--old-key-number=NUMBER]
 ```
 
-Options:
-- `--dry-run`: Generate SQL update statements without modifying the database
-- `--backup`: Create a backup of current encrypted values before re-encryption
+Example output:
+```
+core_config_data::value::config_id
+oauth_consumer::secret::entity_id
+oauth_token::secret::entity_id
+tfa_user_config::encoded_config::config_id
+```
 
-Note --dry-run option, it won’t execute an update query only print it, --dump will write to a file (in the append mode, so you can have the same file for multiple tables), and will also generate a backup file.
+### Generate Commands Mode
 
-You can also update a single record, the command for that will be:
+Run the script in generate-command mode to scan the database for encrypted
+values and generate the appropiate update-table commands.
 
 ```
-php update-encryption.php update-record --table=core_config_data --id-field=config_id --id=1234 --field=value --key=NEW_KEY
+php update-encryption.php generate-commands [--key-number=NUMBER] [--old-key-number=NUMBER] [--dry-run] [--dump-file=FILENAME] [--backup-file=FILENAME]
 ```
+
+Example output:
+```
+php update-encryption.php update-table --table=core_config_data --field=value --id-field=config_id
+php update-encryption.php update-table --table=oauth_consumer --field=secret --id-field=entity_id
+php update-encryption.php update-table --table=oauth_token --field=secret --id-field=entity_id
+php update-encryption.php update-table --table=tfa_user_config --field=encoded_config --id-field=config_id
+```
+
+For the parameters of this mode see Update Table Values mode. Any parameter given will be added to the 
+generated commands.
+
+### Update Table Values Mode
+
+Run the script in the update-tables mode to update the values in the database or echo/dump the commands to
+the console and/or SQL files.
+
+```
+php update-encryption.php update-table --table=TABLE --field=FIELD --id-field=ID_FIELD [--key-number=NUMBER] [--old-key-number=NUMBER] [--dry-run] [--dump-file=FILENAME] [--backup-file=FILENAME]
+```
+
+Example output:
+```
+UPDATE `core_config_data` SET `value`='0:3:**REDACTED**' WHERE `config_id`=313 LIMIT 1;
+UPDATE `core_config_data` SET `value`='0:3:**REDACTED**' WHERE `config_id`=242 LIMIT 1;
+```
+
+It supports the following arguments:
+
+* `--table=TABLE` Table name to update
+* `--field=FIELD` Field name to update
+* `--id-field=ID_FIELD` Field to use as unique identifier
+* `--key-number=NUMBER` (optional) key number to use for encryption (default = 1, e.g. second crypt key)
+* `--old-key-number=NUMBER` (optional) key number to use for decryption (default = 0, e.g. first crypt key)
+* `--dru-run` (optional) if flag is added no SQL queries are executed
+* `--dump-file=FILENAME` (optional) if file is given queries are dumped (added) to this file instead of executing. 
+* `--backup-file=FILENAME` (optional) if file is given queries are dumped (added) to this file to revert the database changes.
+
+### Update Single Record Values Mode
+
+This mode is exactly the same as the Update Table Values Mode but with the addition of 1 parameter:
+
+* `--id=ID` only update this id
+
+
+## Suggested usage
+
+### Step 1
+Put the environment into maintenance mode.
+
+### Step 2
+Make a full backup of the database
+
+## Step 3
+Add an additional crypt key to `env.php`. This additional key needs to be `SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_KEYBYTES` long which in general is 32 characters. Important! The value is a single string seperated by a whitespace (enter or space), e.g. `key1 key2`
+
+## Step 4
+Run the command `php update-encryption.php generate-commands --backup-file=restore-values.sql`
+
+## Step 5
+Run the commands outputted by the previous command. 
+
+## Step 6
+Flush the cache
+
 
 ## Important Notes
 
@@ -86,6 +148,8 @@ php update-encryption.php update-record --table=core_config_data --id-field=conf
 
 - Do not attempt to decrypt or re-encrypt hashed passwords.
 - Be cautious when dealing with payment information and other sensitive data.
+- Always make a backup before using this command
+- Make sure you clean up any file generated by this tool
 
 ## Limitations
 
@@ -97,9 +161,8 @@ php update-encryption.php update-record --table=core_config_data --id-field=conf
 For those preferring a Magento module-based approach, consider:
 [Gene Commerce Encryption Key Manager](https://github.com/genecommerce/module-encryption-key-manager/)
 
-## Contributing
-
-Contributions to improve this tool are welcome. Feel free to Fork it and submit pull requests or open issues on the GitHub repository.
+And also look at the original variant of this script:
+[bemeir/magento2-rotate-encryption-keys](https://github.com/bemeir/magento2-rotate-encryption-keys)
 
 ## License
 
