@@ -38,11 +38,29 @@ This tool is provided as-is, without any warranty. Use at your own risk and alwa
 - Generates backup of current encrypted values
 - Option to update database directly or generate SQL update statements
 - Functionality to scan and replace encrypted values in `env.php`
+- Functionality to generate a key
 
 ## Installation
 
 1. Clone this repository or download the `update-encryption.php` script.
 2. Place the script in the root directory of your Magento installation.
+
+## Functionality (Key)
+
+Below is an description of the commands that are available for generating new keys
+
+### Generate key
+
+Run the script with `generate-key` command to generate a new key
+
+```
+php update-encryption.php generate-key
+```
+
+Example output:
+```
+844f3c66735d7cf85cc41cc80ea6e40d
+```
 
 ## Functionality (Database)
 
@@ -220,7 +238,9 @@ Put the environment into maintenance mode.
 Make a full backup of the database, environment variables and of env.php
 
 ## Step 3
-Add an additional crypt key to `env.php`. This additional key needs to be `SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_KEYBYTES` long which in general is 32 characters. Important! The value is a single string seperated by a whitespace (enter or space), e.g. `key1 key2`
+Add an additional crypt key to `env.php`. This additional key can be generated with `php update-encryption.php generate-key`.
+
+Important! The value is a single string seperated by a whitespace (enter or space), e.g. `key1 key2`
 
 ## Step 4
 Run the command `php update-encryption.php generate-commands`

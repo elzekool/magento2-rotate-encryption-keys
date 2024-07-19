@@ -25,6 +25,7 @@
 
 use Magento\Framework\App\DeploymentConfig\Writer\PhpFormatter;
 use Magento\Framework\Encryption\Adapter\SodiumChachaIetf;
+use Magento\Framework\Math\Random;
 
 // Configure this with relevant tables
 $tablesToExclude = [
@@ -62,8 +63,11 @@ if (!file_exists($basePath . '/app/etc/env.php')) {
 $scriptName = $argv[0];
 $command = $argv[1] ?? "";
 
-if (!in_array($command, ['scan', 'generate-commands', 'update-table', 'update-record', 'scan-env-php', 'update-env-php', 'scan-env', 'update-env'])) {
+if (!in_array($command, ['generate-key', 'scan', 'generate-commands', 'update-table', 'update-record', 'scan-env-php', 'update-env-php', 'scan-env', 'update-env'])) {
     echo "Usage:\n";
+    echo "  Crypt key\n";
+    echo "    php $scriptName generate-key\n";
+    echo "\n";
     echo "  Database commands:\n";
     echo "    php $scriptName scan\n";
     echo "    php $scriptName generate-commands [--key-number=NUMBER] [--old-key-number=NUMBER] [--dry-run] [--dump-file=FILENAME]\n";
@@ -118,6 +122,7 @@ foreach ($argv as $i => $argument) {
 
 require $basePath . '/vendor/magento/framework/Encryption/Adapter/EncryptionAdapterInterface.php';
 require $basePath . '/vendor/magento/framework/Encryption/Adapter/SodiumChachaIetf.php';
+require $basePath . '/vendor/magento/framework/Math/Random.php';
 require $basePath . '/vendor/magento/framework/App/DeploymentConfig/Writer/FormatterInterface.php';
 require $basePath . '/vendor/magento/framework/App/DeploymentConfig/Writer/PhpFormatter.php';
 
@@ -181,7 +186,15 @@ function getMagentoEncryptedEnvironmentVariables(): array
     return $encryptedEnvs;
 }
 
-if ($command == 'scan' || $command == 'generate-commands') {
+if ($command === 'generate-key') {
+    $random = new Random();
+    $key = md5($random->getRandomString(SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_KEYBYTES));
+
+    echo $key . "\n";
+    exit();
+}
+
+if ($command === 'scan' || $command === 'generate-commands') {
     $dbConfig = $env['db']['connection']['default'];
     $db = new PDO(sprintf('mysql:host=%s;dbname=%s;', $dbConfig['host'], $dbConfig['dbname']), $dbConfig['username'], $dbConfig['password']);
 
