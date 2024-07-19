@@ -10,6 +10,7 @@ This is a slightly modified version that has a few differences:
 * It can generate a list of commands from the original scan command
 * Allows running in a sub-folder (for Magento Cloud/Read only file systems)
 * It adds functionality to scan and replace encrypted values in `env.php`
+* It adds functionality to scan and replace encrypted values in environment variables.
 
 ## Overview
 
@@ -130,10 +131,10 @@ Below is an description of the commands that are available for manipulating the 
 
 ### Scan
 
-Run the script with the `scan-env` command to find keys in env.php that contain encrypted properties. A list of paths are returned.
+Run the script with the `scan-env-php` command to find keys in env.php that contain encrypted properties. A list of paths are returned.
 
 ```
-php update-encryption.php scan-env 
+php update-encryption.php scan-env-php
 ```
 
 Example output:
@@ -146,10 +147,10 @@ system/default/buckaroo_magento2/account/merchant_key
 
 ### Update
 
-Run the script with the `update-env` command to find and update keys in env.php that contain encrypted properties.
+Run the script with the `update-env-php` command to find and update keys in env.php that contain encrypted properties.
 
 ```
-php update-encryption.php update-env [--key-number=NUMBER] [--old-key-number=NUMBER] [--dry-run] [--dump-file=FILENAME] [--backup-file=FILENAME]
+php update-encryption.php update-env-php [--key-number=NUMBER] [--old-key-number=NUMBER] [--dry-run] [--dump-file=FILENAME] [--backup-file=FILENAME]
 ```
 
 Example output:
@@ -168,13 +169,55 @@ It supports the following arguments:
 * `--backup-file=FILENAME` (optional) if file is given the current env.php contents is dumped to this filename.
 
 
+## Functionality (environment variables)
+
+Below is an description of the commands that are available for checking environment variables.
+
+### Scan
+
+Run the script with the `scan-env` command to find environment variables that contain encrypted properties. A list of names are returned.
+
+```
+php update-encryption.php scan-env
+```
+
+Example output:
+```
+CONFIG__DEFAULT__BUCKAROO_MAGENTO2__ACCOUNT__MERCHANT_KEY
+CONFIG__DEFAULT__BUCKAROO_MAGENTO2__ACCOUNT__SECRET_KEY
+```
+
+### Update
+
+Run the script with the `update-env` command to generate updated environment values for the ones that are encryped.
+Note that it does not update the environment variables itself. It outputs it the console and (if configured) dumps it to a file.
+
+```
+php update-encryption.php update-env [--key-number=NUMBER] [--old-key-number=NUMBER] [--dry-run] [--dump-file=FILENAME] [--backup-file=FILENAME]
+```
+
+Example output:
+```
+CONFIG__DEFAULT__BUCKAROO_MAGENTO2__ACCOUNT__MERCHANT_KEY='1:3:**REDACTED**'
+CONFIG__DEFAULT__BUCKAROO_MAGENTO2__ACCOUNT__SECRET_KEY='1:3:**REDACTED**'
+```
+
+
+It supports the following arguments:
+
+* `--key-number=NUMBER` (optional) key number to use for encryption (default = 1, e.g. second crypt key)
+* `--old-key-number=NUMBER` (optional) key number to use for decryption (default = 0, e.g. first crypt key)
+* `--dump-file=FILENAME` (optional) if file is given updated environment variables are dumped to this filename.
+* `--backup-file=FILENAME` (optional) if file is given the original environment variables are dumped to this filename.
+
+
 ## Suggested usage
 
 ### Step 1
 Put the environment into maintenance mode.
 
 ### Step 2
-Make a full backup of the database and of env.php
+Make a full backup of the database, environment variables and of env.php
 
 ## Step 3
 Add an additional crypt key to `env.php`. This additional key needs to be `SODIUM_CRYPTO_AEAD_CHACHA20POLY1305_KEYBYTES` long which in general is 32 characters. Important! The value is a single string seperated by a whitespace (enter or space), e.g. `key1 key2`
@@ -186,26 +229,29 @@ Run the command `php update-encryption.php generate-commands`
 Run the commands outputted by the previous command. 
 
 ## Step 6
-Run the command `php update-encryption.php update-env`. In the case that the env.php file is not directly
+Run the command `php update-encryption.php update-env-php`. In the case that the env.php file is not directly
 writable (or uses a symlink) use the `--dry-run` property get the paths and values to update manually.
 
-## Step 7 (Optional: only if your old key is not secure anymore)
+## Step 7
+Run the command `php update-encryption.php update-env` and update the environment variables (how to depends on the hosting infrastructure).
+
+## Step 8 (Optional: only if your old key is not secure anymore)
 If the old key is deemed insecure and needs to be removed then follow the following additional steps.
 Do note that any customer and/or admin password is invalidated and a password reset is needed so use with care. 
 
-* After performing step 1-6 replace the original key with the new key (replace, do not remove!), e.g. if
+* After performing step 1-7 replace the original key with the new key (replace, do not remove!), e.g. if
   your old key was `aaa` and your new key `bbb` replace `aaa bbb` with `bbb bbb`.
 * Run the command `php update-encryption.php generate-commands --key-number=0 --old-key-number=1`
 * Run the commands outputted by the previous command. 
+* Run the command `php update-encryption.php update-env-php --key-number=0 --old-key-number=1`
 * Run the command `php update-encryption.php update-env --key-number=0 --old-key-number=1`
 * You can now remove the duplicate crypt keys from env.php
 
-## Step 8
+## Step 9
 Update Magento configuration with `bin/magento setup:upgrade --keep-generated`
 
-## Step 9
+## Step 10
 Disable maintenance mode
-
 
 
 ## Important Notes

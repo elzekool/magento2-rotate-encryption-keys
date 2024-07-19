@@ -62,7 +62,7 @@ if (!file_exists($basePath . '/app/etc/env.php')) {
 $scriptName = $argv[0];
 $command = $argv[1] ?? "";
 
-if (!in_array($command, ['scan', 'generate-commands', 'update-table', 'update-record', 'scan-env', 'update-env'])) {
+if (!in_array($command, ['scan', 'generate-commands', 'update-table', 'update-record', 'scan-env-php', 'update-env-php', 'scan-env', 'update-env'])) {
     echo "Usage:\n";
     echo "  Database commands:\n";
     echo "    php $scriptName scan\n";
@@ -71,8 +71,11 @@ if (!in_array($command, ['scan', 'generate-commands', 'update-table', 'update-re
     echo "    php $scriptName update-record --table=TABLE --field=FIELD --id-field=ID_FIELD --id=ID [--key-number=NUMBER] [--old-key-number=NUMBER] [--dry-run] [--dump-file=FILENAME] [--backup-file=FILENAME]\n";
     echo "\n";
     echo "  Environment file commands:\n";
-    echo "   php $scriptName scan-env\n";
-    echo "   php $scriptName update-env [--key-number=NUMBER] [--old-key-number=NUMBER] [--dry-run] [--dump-file=FILENAME] [--backup-file=FILENAME]\n";
+    echo "   php $scriptName scan-env-php\n";
+    echo "   php $scriptName update-env-php [--key-number=NUMBER] [--old-key-number=NUMBER] [--dry-run] [--dump-file=FILENAME] [--backup-file=FILENAME]\n";
+    echo "\n";
+    echo "   php $scriptName scan-env [--key-number=NUMBER] [--old-key-number=NUMBER]\n";
+    echo "   php $scriptName update-env [--key-number=NUMBER] [--old-key-number=NUMBER] [--dump-file=FILENAME] [--backup-file=FILENAME]\n";
     exit();
 }
 
@@ -156,15 +159,36 @@ function recursiveScanEnv($envPathsToExclude, $value, callable $onMatch, $path =
     return $value;
 }
 
+function getMagentoEncryptedEnvironmentVariables(): array
+{
+    $encryptedEnvs = [];
+
+    $env = getenv();
+    foreach($env as $key => $value) {
+        if (
+            !str_starts_with($key, 'CONFIG__DEFAULT__') &&
+            !str_starts_with($key, 'CONFIG__WEBSITES__') &&
+            !str_starts_with($key, 'CONFIG__STORES__')
+        ) {
+            continue;
+        }
+
+        if (is_string($value) && preg_match("%^\d\:\d\:%", $value)) {
+            $encryptedEnvs[$key] = $value;
+        }
+    }
+
+    return $encryptedEnvs;
+}
+
 if ($command == 'scan' || $command == 'generate-commands') {
     $dbConfig = $env['db']['connection']['default'];
     $db = new PDO(sprintf('mysql:host=%s;dbname=%s;', $dbConfig['host'], $dbConfig['dbname']), $dbConfig['username'], $dbConfig['password']);
 
     $encryptedFields = [];
 
-    $tables = $db->query("SHOW TABLES")->fetchAll();
-
-    foreach ($tables as $tableRow) {
+    $tableResult = $db->query("SHOW TABLES");
+    while(false !== ($tableRow = $tableResult->fetch())) {
         $table = $tableRow[0];
         $skipTable = false;
         foreach ($tablesToExclude as $pattern) {
@@ -178,8 +202,8 @@ if ($command == 'scan' || $command == 'generate-commands') {
             continue;
         }
 
-        $data = $db->query("SELECT * FROM $table")->fetchAll(PDO::FETCH_ASSOC);
-        if (!$data) {
+        $dataResult = $db->query("SELECT * FROM $table");
+        if (!$dataResult) {
             continue;
         }
 
@@ -195,7 +219,7 @@ if ($command == 'scan' || $command == 'generate-commands') {
             }
         }
 
-        foreach ($data as $row) {
+        while (false !== ($row = $dataResult->fetch(PDO::FETCH_ASSOC))) {
             foreach ($row as $fieldName => $value) {
                 if (($value !== null) && preg_match("%^\d\:\d\:%", $value)) {
                     $encryptedField = sprintf("%s::%s::%s", $table, $fieldName, $idField);
@@ -205,7 +229,11 @@ if ($command == 'scan' || $command == 'generate-commands') {
                 }
             }
         }
+
+        $dataResult->closeCursor();
     }
+
+    $tableResult->closeCursor();
 
     if ($command === 'generate-commands') {
         foreach ($encryptedFields as $encryptedField) {
@@ -263,7 +291,7 @@ if ($command == 'update-table' || $command == 'update-record') {
     }
 
     $query = sprintf("SELECT * FROM `%s` WHERE `%s` LIKE '%d:3%%' %s", $table, $field, $keyNumber, $recordFilter);
-    $data = $db->query($query)->fetchAll(PDO::FETCH_ASSOC);
+    $dataResult = $db->query($query);
 
     $fileHandler = null;
     $backupHandler = null;
@@ -273,7 +301,7 @@ if ($command == 'update-table' || $command == 'update-record') {
     if (!empty($params['backup-file'])) {
         $backupHandler = fopen($params['backup-file'], 'a');
     }
-    foreach ($data as $row) {
+    while (false !== ($row = $dataResult->fetch(PDO::FETCH_ASSOC))) {
         $value = $row[$field];
         $chunks      = explode(':', $value);
         $decrypted   = $crypt->decrypt(base64_decode($chunks[2]));
@@ -310,15 +338,17 @@ if ($command == 'update-table' || $command == 'update-record') {
             $db->query($updateQuery);
         }
     }
+
+    $dataResult->closeCursor();
 }
 
-if ($command === 'scan-env') {
+if ($command === 'scan-env-php') {
     recursiveScanEnv($envPathsToExclude, $env, function($value, $path) {
         echo sprintf("%s", $path) . "\n";
     });
 }
 
-if ($command === 'update-env') {
+if ($command === 'update-env-php') {
     $updatedEnv = recursiveScanEnv($envPathsToExclude, $env, function(&$value, $path) use ($crypt, $cryptNew, $params) {
         if (!str_starts_with($value, sprintf('%d:3', $params['old-key-number']))) {
             return;
@@ -347,5 +377,40 @@ if ($command === 'update-env') {
 
     if (!$params['dry-run'] && empty($params['dump-file'])) {
         file_put_contents($basePath . '/app/etc/env.php', $newEnvContents);
+    }
+}
+
+if ($command === 'scan-env') {
+    foreach(getMagentoEncryptedEnvironmentVariables() as $env => $value) {
+        echo sprintf("%s", $env) . "\n";
+    }
+}
+
+if ($command === 'update-env') {
+    $envStrings = [];
+    $envStringsOriginal = [];
+
+    foreach(getMagentoEncryptedEnvironmentVariables() as $env => $value) {
+        if (!str_starts_with($value, sprintf('%d:3', $params['old-key-number']))) {
+            continue;
+        }
+
+        $chunks      = explode(':', $value);
+        $decrypted   = $crypt->decrypt(base64_decode($chunks[2]));
+        $reEncrypted = sprintf("%d:3:%s", $params['key-number'], base64_encode($cryptNew->encrypt($decrypted)));
+
+        $envString = sprintf("%s=%s", $env, escapeshellarg($reEncrypted));
+        $envStrings[] = $envString;
+        $envStringsOriginal[] = sprintf("%s=%s", $env, escapeshellarg($value));
+
+        echo $envString . "\n";
+    }
+
+    if (!empty($params['dump-file'])) {
+        file_put_contents($params['dump-file'], join("\n", $envStrings));
+    }
+
+    if (!empty($params['backup-file'])) {
+        file_put_contents($params['backup-file'], join("\n", $envStringsOriginal));
     }
 }
